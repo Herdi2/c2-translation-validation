@@ -6,20 +6,26 @@ import C2Validator.Fuzzer.Basic
 
 open ValError
 
-def compileIR (level : Nat) (method : Option String) (path : System.FilePath) (printGraph : Bool): IO (Error System.FilePath):= do
+def compileIR (level : Nat) (method : Option String) (javaBin : String) (path : System.FilePath) (printGraph : Bool): IO (Error System.FilePath):= do
   let path ← IO.FS.realPath path
   let xml := path.withExtension "xml"
   let jClass := path.fileStem.get!
   let method := method.getD s!"{jClass}::{jClass.toLower}"
   let command : IO.Process.SpawnArgs :=
-      { cmd := "java"
+      { cmd := javaBin
       , args := let args := #[ "-Xcomp"
                 , s!"-XX:CompileCommand=compileonly,{method}"
                 , s!"-XX:PrintIdealGraphLevel={level}"
                 , s!"-XX:PrintIdealGraphFile={xml}"
+                -- Print floating-point numbers as binaries (NOTE: Custom JDK flag)
+                ,"-XX:+PrintFloatBits"
+                -- Delay arithmetic optimizations to after parsing (NOTE: Custom JDK flag)
+                ,"-XX:+DelayArithmeticOpts"
+                -- Print numeral values instead of "minint/maxint" (NOTE: Custom JDK flag)
+                ,"-XX:+PrintRealMinMax"
                 , path.toString
                 ]
-                have h : args.size = 5 := by
+                have h : args.size = 8 := by
                   constructor
                 if printGraph then args else args.eraseIdx 3
       , stdout := if printGraph then .null else .inherit
@@ -69,14 +75,14 @@ def verifyXML (path : System.FilePath) (timeout : Int): IO UInt32 := do
   let result ← verifyXML' path timeout
   showResult result path
 
-def compileAndVerify (method : Option String) (path : System.FilePath) (timeout : Int): IO UInt32 := do
-  let xml ← compileIR 1 method path true
+def compileAndVerify (method : Option String) (path : System.FilePath) (timeout : Int) (javaBin : String): IO UInt32 := do
+  let xml ← compileIR 1 method javaBin path true
   let result ← match xml with
     | .ok xml => verifyXML' xml timeout
     | .error e => pure $ (0, throw e)
   showResult result path
 
-def fuzzAndVerify (threaded : Bool) (limit : Nat) (timeout : Nat) (depth : Nat) (path : System.FilePath) : IO PUnit := do
+def fuzzAndVerify (threaded : Bool) (limit : Nat) (timeout : Nat) (depth : Nat) (javaBin : String) (path : System.FilePath) : IO PUnit := do
   let date ← IO.Process.run {cmd := "date"}
   let path := path.join $ (date.replace " " "-").dropRight 1
   let shouldremove ← path.isDir
@@ -91,7 +97,7 @@ def fuzzAndVerify (threaded : Bool) (limit : Nat) (timeout : Nat) (depth : Nat) 
     IO.println s!"=============== Fuzzing \x1b[1;36m{idx}/{limit}\x1b[0m ==============="
     IO.println s!"[INFO] Generating Test{idx}.java ..."
     let (size, javaFile) ← fuzzer.fuzzProgram idx depth path
-    let xml ← compileIR 1 none javaFile true
+    let xml ← compileIR 1 none javaBin javaFile true
     let result ← match xml with
       | .ok xml => verifyXML' xml timeout
       | .error e => pure $ (0, throw e)

@@ -222,10 +222,10 @@ def parseRaw (elem : Element) : Error (GraphRaw × GraphRaw) := do
   let graphs ← content "group" (contentFiltered filter readGraphRaw) elem
   match (graphs[0]?, graphs[1]?) with
   | (some g1, some g2) => pure $ if g1.name == "After Parsing" then (g1, g2) else (g2, g1)
-  | _ => throw $ ValError.Parse "«After Parsing» or «Before matching» phase missing."
+  | _ => throw $ ValError.Parse "«After Parsing» or «Before Matching» phase missing."
 where
   filter := List.and <$> sequence
       [ (λ x ↦ x == "graph") <$> eName
-      , eAttr? "name" λ x ↦ some $ x == "After Parsing" || x == "Before matching"
+      , eAttr? "name" λ x ↦ some $ x == "After Parsing" || x == "Before Matching"
       ]
   sequence := List.mapM id
