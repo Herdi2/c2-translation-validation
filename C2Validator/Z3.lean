@@ -215,7 +215,11 @@ def collectSideEffects : List Term →  Term
 
 def axioms : String := "(assert (forall ((x IO)) (= x (join x (mkIO 0)))))\n(assert (forall ((x IO)) (= x (join (mkIO 0) x))))"
 
-def z3Opts : String := "(set-option :dump_models true)\n(set-option :pp.bv_literals true)\n\n"
+-- NOTE: Modified to match my SMT solver options
+def z3Opts : String := 
+    "(set-option :dump_models true)\n
+     (set-option :pp.bv_literals true)\n
+     \n"
 
 instance : ToString Program where
   toString p :=
@@ -248,15 +252,9 @@ def runZ3 (path : System.FilePath) (timeout : Int) (smt : Bool): IO (Nat × Erro
   { cmd := "z3"
   , args := #[s!"sat.smt={smt}", s!"-T:{timeout}", s!"{path}"]
   }
-  let timeCmd : IO.Process.SpawnArgs :=
-  { cmd := "bash"
-  , args := #["-c", "if [ $(uname) = \"Linux\" ]; then date +%s%3N; else if command -v gdate 2>&1 >/dev/null; then gdate +%s%3N; else date +%s000; fi fi"]
-  }
-  let startTime ← IO.Process.run timeCmd
+  let startTime ← IO.monoNanosNow
   let .mk _ output _ ← IO.Process.output command
-  let endTime ← IO.Process.run timeCmd
-  let startTime := (startTime.stripSuffix "\n").toNat!
-  let endTime := (endTime.stripSuffix "\n").toNat!
+  let endTime ← IO.monoNanosNow
   let result ← if "unsat".isPrefixOf output
     then pure $ pure ()
   else if "sat".isPrefixOf output

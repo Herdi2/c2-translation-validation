@@ -41,7 +41,7 @@ def runFuzz (p: Parsed) : IO UInt32 := do
   let path : String := p.positionalArg! "output" |>.as! String
   let depth := λ x ↦ x |>.as! Nat <$> p.flag? "depth" |>.getD 10
   let number := λ x ↦ x |>.as! Nat <$> p.flag? "number" |>.getD 20
-  let timeout := λ x ↦ x |>.as! Nat <$> p.flag? "timeout" |>.getD 80
+  let timeout := λ x ↦ x |>.as! Nat <$> p.flag? "timeout" |>.getD 60
   let javaBin := λ x ↦ x |>.as! String <$> p.flag? "java" |>.getD "java"
   let threaded := p.hasFlag "threaded"
   fuzzAndVerify threaded number timeout depth javaBin path

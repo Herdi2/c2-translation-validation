@@ -208,13 +208,15 @@ let (ret, (_, body)) ← (printExpr expr).run (0, "")
 pure $ ((body.split λ c ↦ c == '\n').length, s!"\
 public class Test{idx}" ++ " {" ++ s!"
     public static void main(String[] args)" ++ " {" ++s!"
-      try" ++ " {" ++s!"
-        test{idx}({String.intercalate ", " $ paramList.map λ _ ↦ "0"});
-      } catch (Exception e)" ++ " {" ++s!"
-      }
+        for (int i = 0; i < 20000; i++)" ++ " {" ++ s!"
+          try" ++ " {" ++s!"
+            method({String.intercalate ", " $ paramList.map λ _ ↦ "i"});
+          } catch (Exception e)" ++ " {" ++s!"
+          }
+        }
     }
 
-    static double test{idx} ({String.intercalate ", " paramList}) "++" {"++s!"
+    static double method({String.intercalate ", " paramList}) "++" {"++s!"
 {body}        return {ret};
     }
 }\n")

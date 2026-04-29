@@ -10,10 +10,13 @@ def compileIR (level : Nat) (method : Option String) (javaBin : String) (path : 
   let path ← IO.FS.realPath path
   let xml := path.withExtension "xml"
   let jClass := path.fileStem.get!
-  let method := method.getD s!"{jClass}::{jClass.toLower}"
+  let method := method.getD s!"{jClass}::method"
   let command : IO.Process.SpawnArgs :=
       { cmd := javaBin
-      , args := let args := #[ "-Xcomp"
+      , args := let args := #[
+                s!"-Xcomp"
+                , s!"-XX:-TieredCompilation" -- C2 only
+                , s!"-XX:-UseCompressedOops"
                 , s!"-XX:CompileCommand=compileonly,{method}"
                 , s!"-XX:PrintIdealGraphLevel={level}"
                 , s!"-XX:PrintIdealGraphFile={xml}"
@@ -25,7 +28,7 @@ def compileIR (level : Nat) (method : Option String) (javaBin : String) (path : 
                 ,"-XX:+PrintRealMinMax"
                 , path.toString
                 ]
-                have h : args.size = 8 := by
+                have h : args.size = 10 := by
                   constructor
                 if printGraph then args else args.eraseIdx 3
       , stdout := if printGraph then .null else .inherit
@@ -38,11 +41,10 @@ def compileIR (level : Nat) (method : Option String) (javaBin : String) (path : 
     else
     pure $ pure xml
 
-def showResult (result : Nat × Error PUnit) (path : System.FilePath): IO UInt32 :=
+def showResult (result : Nat × Nat × Error PUnit) (path : System.FilePath): IO UInt32 :=
   let path := path.fileName.get!
-  let (time, result) := result
-  let time := time.toFloat / 1000
-  let time := s!"[INFO] Finished in {time} seconds ({path})\n"
+  let (smtTime, totTime, result) := result
+  let time := s!"[INFO] Finished SMT in {smtTime.toFloat / 1e9}s, total time in {totTime.toFloat / 1e9}s ({path})\n"
   match result with
   | .ok _ => do
     IO.println $ time ++ s!"[INFO] [\x1b[1;32mVerified\x1b[0m] [{path}]"
@@ -61,15 +63,18 @@ def showResult (result : Nat × Error PUnit) (path : System.FilePath): IO UInt32
     | .Timeout | .Undecidable => pure 2
     | _ => pure 1
 
-def verifyXML' (path : System.FilePath) (timeout : Int): IO (Nat × Error PUnit) := do
+def verifyXML' (path : System.FilePath) (timeout : Int): IO (Nat × Nat × Error PUnit) := do
   let xml ← IO.FS.readFile path
-  let graphs := do
-    let elem := Except.mapError ValError.Parse $ Lean.Xml.parse xml
-    SoN.parse =<< elem
+  let elem := Except.mapError ValError.Parse $ Lean.Xml.parse xml
+  let startTime ← IO.monoNanosNow
+  let graphs := SoN.parse =<< elem
   let program := graphs >>= (Function.uncurry VC.vcGen)
-  let run ← match program with
+  let (smtTime, res) ← match program with
   | .ok p => Z3.validate path p timeout
   | .error e => pure $ (0, throw e)
+  let endTime ← IO.monoNanosNow
+  let totTime := endTime - startTime
+  return (smtTime, totTime, res)
 
 def verifyXML (path : System.FilePath) (timeout : Int): IO UInt32 := do
   let result ← verifyXML' path timeout
@@ -79,8 +84,11 @@ def compileAndVerify (method : Option String) (path : System.FilePath) (timeout 
   let xml ← compileIR 1 method javaBin path true
   let result ← match xml with
     | .ok xml => verifyXML' xml timeout
-    | .error e => pure $ (0, throw e)
+    | .error e => pure $ (0, 0, throw e)
   showResult result path
+
+def replicateM [Monad m] (n : Nat) (x : m α) : m (List α) :=
+  List.range n |>.mapM (fun _ => x)
 
 def fuzzAndVerify (threaded : Bool) (limit : Nat) (timeout : Nat) (depth : Nat) (javaBin : String) (path : System.FilePath) : IO PUnit := do
   let date ← IO.Process.run {cmd := "date"}
@@ -91,7 +99,7 @@ def fuzzAndVerify (threaded : Bool) (limit : Nat) (timeout : Nat) (depth : Nat) 
   let path ← IO.FS.realPath path
   let reportFile := path.join "report.csv"
   let handle ← IO.FS.Handle.mk reportFile .append
-  handle.putStrLn s!"file,result,msg,size,time"
+  handle.putStrLn s!"java-file,result,msg,size,smt-time,total-time"
   let fuzzExample idx := do
     let idx := idx + 1
     IO.println s!"=============== Fuzzing \x1b[1;36m{idx}/{limit}\x1b[0m ==============="
@@ -100,9 +108,10 @@ def fuzzAndVerify (threaded : Bool) (limit : Nat) (timeout : Nat) (depth : Nat) 
     let xml ← compileIR 1 none javaBin javaFile true
     let result ← match xml with
       | .ok xml => verifyXML' xml timeout
-      | .error e => pure $ (0, throw e)
-    let (time, result') := result
-    let time := time.toFloat / 1000
+      | .error e => pure $ (0, 0, throw e)
+    let (smtTime, totTime, result') := result
+    let smtTime := smtTime.toFloat / 1e9
+    let totTime := totTime.toFloat / 1e9
     let msg := match result' with
     | .ok _ => s!"Verified,"
     | .error e => match e with
@@ -111,10 +120,10 @@ def fuzzAndVerify (threaded : Bool) (limit : Nat) (timeout : Nat) (depth : Nat) 
     | .Undecidable => s!"Undecidable,loop"
     | .CounterExample ce => s!"Counter Example,Counter example available at {ce}"
     | .Z3 s => s!"Z3 Error,\"{s.replace "\n" "\\n"}\""
-    | .VC s => s!"Verfi Cond Gen Error,\"{s.replace "\n" "\\n"}\""
+    | .VC s => s!"VC Gen Error,\"{s.replace "\n" "\\n"}\""
     | .Parse s => s!"Parsing Error,\"{s.replace "\n" "\\n"}\""
     | .Timeout => s!"Timeout,"
-    handle.putStrLn s!"{javaFile},{msg},{size},{time}"
+    handle.putStrLn s!"{javaFile},{msg},{size},{smtTime},{totTime}"
     handle.flush
     let _ ← showResult result javaFile
     pure ()
@@ -123,3 +132,4 @@ def fuzzAndVerify (threaded : Bool) (limit : Nat) (timeout : Nat) (depth : Nat) 
   else
     forM (List.range limit) fuzzExample
 where concurrently io := BaseIO.toIO $ (IO.asTask io).map λ _ ↦ ()
+
